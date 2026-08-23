@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import {
   Trophy,
   Footprints,
@@ -17,10 +18,18 @@ import {
   Sparkles,
   Plus,
   Crown,
+  Navigation,
+  Gauge,
+  MapPin,
 } from 'lucide-react-native';
 import { useAuth } from '../context/AuthContext';
 import { socketService } from '../services/socketService';
 import { startHybridStepTracking } from '../services/pedometerService';
+import {
+  calculateHaversineDistanceKm,
+  requestLocationPermissions,
+  LocationPoint,
+} from '../services/gpsWorkoutService';
 
 interface LiveRaceModalProps {
   visible: boolean;
@@ -41,11 +50,16 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
   const [countdown, setCountdown] = useState<number | null>(3);
   const [participants, setParticipants] = useState<any[]>(initialParticipants);
   const [mySteps, setMySteps] = useState<number>(0);
+  const [distanceKm, setDistanceKm] = useState<number>(0.0);
+  const [currentSpeedKmh, setCurrentSpeedKmh] = useState<number>(0.0);
   const [isFinished, setIsFinished] = useState<boolean>(false);
   const [myRank, setMyRank] = useState<number | null>(null);
 
   const myStepsRef = useRef<number>(0);
+  const distanceKmRef = useRef<number>(0.0);
   const isFinishedRef = useRef<boolean>(false);
+  const locationSubRef = useRef<Location.LocationSubscription | null>(null);
+  const lastLocationRef = useRef<LocationPoint | null>(null);
 
   // Synchronized countdown on start
   useEffect(() => {
@@ -55,8 +69,12 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
     setIsFinished(false);
     setMyRank(null);
     setMySteps(0);
+    setDistanceKm(0.0);
+    setCurrentSpeedKmh(0.0);
     myStepsRef.current = 0;
+    distanceKmRef.current = 0.0;
     isFinishedRef.current = false;
+    lastLocationRef.current = null;
 
     let count = 3;
     const interval = setInterval(() => {
@@ -80,11 +98,76 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
     return () => clearInterval(interval);
   }, [visible]);
 
-  // Live motion sensor tracking & Socket broadcasts
+  // Live GPS Locator + Motion Sensor Tracking + Socket Broadcasts
   useEffect(() => {
     if (!visible || countdown !== null || !challenge || !user) return;
 
+    let isMounted = true;
     let stepBatch = 0;
+
+    // 1. Request and Start Strava-style High-Accuracy GPS Locator
+    const startGps = async () => {
+      const hasLoc = await requestLocationPermissions();
+      if (!hasLoc || !isMounted) return;
+
+      try {
+        locationSubRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 1000,
+            distanceInterval: 2, // every 2 meters
+          },
+          (location) => {
+            if (isFinishedRef.current) return;
+
+            const { latitude, longitude, speed, accuracy } = location.coords;
+            if (accuracy && accuracy > 35) return;
+
+            const currentPoint: LocationPoint = {
+              latitude,
+              longitude,
+              timestamp: location.timestamp,
+              speed,
+              accuracy,
+            };
+
+            if (lastLocationRef.current) {
+              const deltaKm = calculateHaversineDistanceKm(
+                lastLocationRef.current.latitude,
+                lastLocationRef.current.longitude,
+                latitude,
+                longitude
+              );
+
+              // Validate genuine walking speed (delta < 80 meters per sec)
+              if (deltaKm > 0.001 && deltaKm < 0.08) {
+                distanceKmRef.current = Number((distanceKmRef.current + deltaKm).toFixed(3));
+                setDistanceKm(distanceKmRef.current);
+
+                // Convert GPS distance into steps based on average stride (72cm)
+                const strideM = 0.72;
+                const estGpsSteps = Math.round((distanceKmRef.current * 1000) / strideM);
+                if (estGpsSteps > myStepsRef.current) {
+                  myStepsRef.current = estGpsSteps;
+                  setMySteps(estGpsSteps);
+                  socketService.broadcastStepUpdate(challenge.id, user.id, estGpsSteps);
+                }
+              }
+            }
+
+            const speedKmh = Math.max(0, (speed || 0) * 3.6);
+            setCurrentSpeedKmh(Number(speedKmh.toFixed(1)));
+            lastLocationRef.current = currentPoint;
+          }
+        );
+      } catch (err) {
+        console.warn('Race GPS error:', err);
+      }
+    };
+
+    startGps();
+
+    // 2. Start Hybrid Motion Sensor for local footstep impacts
     const unsubscribeMotion = startHybridStepTracking((delta) => {
       if (isFinishedRef.current) return;
 
@@ -99,18 +182,22 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
       }
     });
 
-    // Socket Listeners
+    // 3. Socket Event Listeners
     const unsubLeaderboard = socketService.onLeaderboardUpdate((data) => {
-      if (data.challengeId === challenge.id) {
+      if (data.challengeId === challenge.id && isMounted) {
         setParticipants(data.participants);
       }
     });
 
     const unsubFinished = socketService.onParticipantFinished((data) => {
-      if (data.userId === user.id) {
+      if (data.userId === user.id && isMounted) {
         setIsFinished(true);
         isFinishedRef.current = true;
         setMyRank(data.rank);
+        if (locationSubRef.current) {
+          locationSubRef.current.remove();
+          locationSubRef.current = null;
+        }
         try {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         } catch (_) {}
@@ -118,7 +205,10 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
     });
 
     const unsubCompleted = socketService.onChallengeCompleted((data) => {
-      // Race finished for all!
+      if (locationSubRef.current) {
+        locationSubRef.current.remove();
+        locationSubRef.current = null;
+      }
       onRaceFinished({
         challenge,
         participants,
@@ -127,14 +217,19 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
     });
 
     return () => {
+      isMounted = false;
       unsubscribeMotion();
+      if (locationSubRef.current) {
+        locationSubRef.current.remove();
+        locationSubRef.current = null;
+      }
       unsubLeaderboard();
       unsubFinished();
       unsubCompleted();
     };
   }, [visible, countdown, challenge, user, myRank, participants]);
 
-  // Manual step simulator button for fast testing on phone / emulator
+  // Dev simulation buttons for fast testing
   const handleAddSimulatedSteps = (amount: number) => {
     if (isFinishedRef.current || !challenge || !user) return;
 
@@ -178,15 +273,29 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
               ) : (
                 <View style={styles.racingBadge}>
                   <View style={styles.livePulseDot} />
-                  <Text style={styles.racingBadgeText}>LIVE RACE</Text>
+                  <Text style={styles.racingBadgeText}>GPS & MOTION LIVE</Text>
                 </View>
               )}
             </View>
 
-            {/* My Live Step Card */}
+            {/* My Live Step & GPS HUD Card */}
             <View style={styles.myStepCard}>
-              <Text style={styles.myStepLabel}>YOUR CURRENT STEPS</Text>
-              <Text style={styles.myStepValue}>{mySteps.toLocaleString()}</Text>
+              <View style={styles.hudTopRow}>
+                <View>
+                  <Text style={styles.myStepLabel}>YOUR CURRENT STEPS</Text>
+                  <Text style={styles.myStepValue}>{mySteps.toLocaleString()}</Text>
+                </View>
+                <View style={styles.gpsTelemetryPills}>
+                  <View style={styles.gpsPill}>
+                    <Gauge size={14} color="#38BDF8" />
+                    <Text style={styles.gpsPillVal}>{currentSpeedKmh} km/h</Text>
+                  </View>
+                  <View style={styles.gpsPill}>
+                    <MapPin size={14} color="#38BDF8" />
+                    <Text style={styles.gpsPillVal}>{distanceKm.toFixed(2)} km</Text>
+                  </View>
+                </View>
+              </View>
 
               {/* Progress Bar */}
               <View style={styles.progressBarBg}>
@@ -425,6 +534,11 @@ const styles = StyleSheet.create({
     borderColor: '#334155',
     marginBottom: 16,
   },
+  hudTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
   myStepLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -433,10 +547,28 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   myStepValue: {
-    fontSize: 44,
+    fontSize: 40,
     fontWeight: '900',
     color: '#FFFFFF',
     letterSpacing: -1,
+  },
+  gpsTelemetryPills: {
+    gap: 6,
+    alignItems: 'flex-end',
+  },
+  gpsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(56, 189, 248, 0.12)',
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+    gap: 4,
+  },
+  gpsPillVal: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#38BDF8',
   },
   progressBarBg: {
     height: 10,

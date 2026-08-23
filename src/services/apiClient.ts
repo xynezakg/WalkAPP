@@ -4,7 +4,7 @@ import Constants from 'expo-constants';
 
 // 👉 PASTE YOUR RENDER URL HERE (e.g. 'https://walkapp-backend.onrender.com')
 // If left empty, it will automatically connect to your local PC over Wi-Fi
-export const PRODUCTION_SERVER_URL: string = '';
+export const PRODUCTION_SERVER_URL: string = 'https://walkapp-backend-3eqp.onrender.com';
 
 /**
  * Automatically detects your computer's local Wi-Fi IP address
