@@ -22,6 +22,7 @@ import {
   UserPlus,
   Copy,
   Sparkles,
+  Trash2,
 } from 'lucide-react-native';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../services/apiClient';
@@ -86,10 +87,18 @@ export const ChallengeLobbyModal: React.FC<ChallengeLobbyModalProps> = ({
       onRaceStart(challenge, participants);
     });
 
+    const unsubCancelled = socketService.onChallengeCancelled((data) => {
+      if (data.challengeId === challengeId) {
+        Alert.alert('Challenge Cancelled', data.message || 'The host has cancelled this challenge.');
+        onClose();
+      }
+    });
+
     return () => {
       isMounted = false;
       unsubParticipants();
       unsubStarting();
+      unsubCancelled();
     };
   }, [visible, challengeId, user]);
 
@@ -126,6 +135,31 @@ export const ChallengeLobbyModal: React.FC<ChallengeLobbyModalProps> = ({
 
     setIsStarting(true);
     socketService.startChallengeRace(challenge.id, user.id);
+  };
+
+  const handleCancelChallenge = () => {
+    if (!challenge || !user) return;
+    Alert.alert(
+      'Cancel Challenge',
+      `Are you sure you want to cancel "${challenge.title}"? All joined players will be notified.`,
+      [
+        { text: 'No, Keep Lobby', style: 'cancel' },
+        {
+          text: 'Yes, Cancel Challenge',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.cancelChallenge(challenge.id);
+              socketService.cancelChallenge(challenge.id, user.id);
+              Alert.alert('Cancelled', 'Your challenge was cancelled.');
+              onClose();
+            } catch (e: any) {
+              Alert.alert('Error', e.message || 'Could not cancel challenge.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   const isHost = challenge?.creatorId === user?.id;
@@ -269,21 +303,31 @@ export const ChallengeLobbyModal: React.FC<ChallengeLobbyModalProps> = ({
         {challenge && (
           <View style={styles.bottomBar}>
             {isHost ? (
-              <TouchableOpacity
-                style={[styles.startRaceBtn, isStarting && { opacity: 0.7 }]}
-                onPress={handleStartChallenge}
-                disabled={isStarting}
-                activeOpacity={0.85}
-              >
-                {isStarting ? (
-                  <ActivityIndicator color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Play size={20} color="#FFFFFF" fill="#FFFFFF" />
-                    <Text style={styles.startRaceBtnText}>START CHALLENGE RACE</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              <View style={styles.hostControlRow}>
+                <TouchableOpacity
+                  style={[styles.startRaceBtn, isStarting && { opacity: 0.7 }]}
+                  onPress={handleStartChallenge}
+                  disabled={isStarting}
+                  activeOpacity={0.85}
+                >
+                  {isStarting ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <Play size={18} color="#FFFFFF" fill="#FFFFFF" />
+                      <Text style={styles.startRaceBtnText}>START RACE</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.cancelLobbyBtn}
+                  onPress={handleCancelChallenge}
+                  activeOpacity={0.8}
+                >
+                  <Trash2 size={18} color="#DC2626" />
+                </TouchableOpacity>
+              </View>
             ) : (
               <View style={styles.waitingBanner}>
                 <ActivityIndicator size="small" color="#2563EB" />
@@ -557,7 +601,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E2E8F0',
   },
+  hostControlRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
   startRaceBtn: {
+    flex: 1,
     backgroundColor: '#10B981',
     flexDirection: 'row',
     alignItems: 'center',
@@ -565,6 +615,16 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     borderRadius: 16,
     gap: 10,
+  },
+  cancelLobbyBtn: {
+    width: 52,
+    height: 52,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#FECACA',
   },
   startRaceBtnText: {
     color: '#FFFFFF',

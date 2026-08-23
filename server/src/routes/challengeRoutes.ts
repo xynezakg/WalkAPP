@@ -301,3 +301,32 @@ challengeRouter.post('/:id/photo', authenticateToken, (req: AuthRequest, res: Re
     res.status(500).json({ error: 'Failed to upload photo' });
   }
 });
+
+// POST /api/challenges/:id/cancel (Cancel challenge by host/leader)
+challengeRouter.post('/:id/cancel', authenticateToken, (req: AuthRequest, res: Response): void => {
+  try {
+    const challengeId = String(req.params.id);
+    const challenge = db.prepare('SELECT * FROM challenges WHERE id = ?').get(challengeId) as any;
+
+    if (!challenge) {
+      res.status(404).json({ error: 'Challenge not found' });
+      return;
+    }
+
+    if (challenge.creatorId !== req.user!.id && req.user!.role !== 'admin') {
+      res.status(403).json({ error: 'Only the challenge leader can cancel this challenge.' });
+      return;
+    }
+
+    db.prepare("UPDATE challenges SET status = 'cancelled' WHERE id = ?").run(challengeId);
+    db.prepare("UPDATE challenge_participants SET status = 'cancelled' WHERE challengeId = ?").run(challengeId);
+
+    res.json({
+      message: 'Challenge has been cancelled successfully',
+      challengeId,
+    });
+  } catch (error) {
+    console.error('Cancel challenge error:', error);
+    res.status(500).json({ error: 'Failed to cancel challenge' });
+  }
+});

@@ -122,6 +122,26 @@ export function setupSocketHandlers(io: Server) {
       });
     });
 
+    // Leader cancels the challenge
+    socket.on('cancel_challenge', ({ challengeId, userId }) => {
+      const roomName = `challenge:${challengeId}`;
+      const challenge = db.prepare('SELECT * FROM challenges WHERE id = ?').get(challengeId) as any;
+
+      if (!challenge) return;
+      if (challenge.creatorId !== userId) {
+        socket.emit('error_message', 'Only the challenge leader can cancel this challenge.');
+        return;
+      }
+
+      db.prepare("UPDATE challenges SET status = 'cancelled' WHERE id = ?").run(challengeId);
+      db.prepare("UPDATE challenge_participants SET status = 'cancelled' WHERE challengeId = ?").run(challengeId);
+
+      io.to(roomName).emit('challenge_cancelled', {
+        challengeId,
+        message: `Challenge "${challenge.title}" was cancelled by the host.`,
+      });
+    });
+
     socket.on('disconnect', () => {
       console.log(`[Socket] Client disconnected: ${socket.id}`);
     });

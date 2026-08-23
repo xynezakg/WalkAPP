@@ -31,20 +31,52 @@ export function calculateHaversineDistanceKm(
 }
 
 /**
+ * Validates that both Phone GPS Hardware Services and App Location Permissions are active.
+ */
+export async function ensureLocationReady(): Promise<{ isReady: boolean; reason?: string }> {
+  try {
+    // 1. Check if Device Hardware Location / GPS is turned on
+    const servicesEnabled = await Location.hasServicesEnabledAsync();
+    if (!servicesEnabled) {
+      try {
+        await Location.enableNetworkProviderAsync();
+      } catch (_) {
+        Alert.alert(
+          '📍 GPS Location is Turned OFF',
+          'Please swipe down your notification bar and turn on Device Location (GPS) in Android Settings so WalkAPP can track your movement.'
+        );
+        return { isReady: false, reason: 'Device GPS hardware is turned off.' };
+      }
+    }
+
+    // 2. Check & Request App Foreground Location Permission
+    let { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== Location.PermissionStatus.GRANTED) {
+      const req = await Location.requestForegroundPermissionsAsync();
+      status = req.status;
+    }
+
+    if (status !== Location.PermissionStatus.GRANTED) {
+      Alert.alert(
+        'Location Permission Needed',
+        'WalkAPP requires location permission to measure live GPS speed and walking distance.'
+      );
+      return { isReady: false, reason: 'Location permission denied.' };
+    }
+
+    return { isReady: true };
+  } catch (error: any) {
+    console.warn('Location validation error:', error);
+    return { isReady: false, reason: error.message || 'Unknown GPS error.' };
+  }
+}
+
+/**
  * Requests Foreground Location permission for Strava-style outdoor workouts.
  */
 export async function requestLocationPermissions(): Promise<boolean> {
-  try {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    return status === Location.PermissionStatus.GRANTED;
-  } catch (error) {
-    console.warn('Error requesting location permissions:', error);
-    Alert.alert(
-      'Location Permission Required',
-      'WalkAPP needs GPS location access to track your outdoor walking route, live speed, and distance.'
-    );
-    return false;
-  }
+  const result = await ensureLocationReady();
+  return result.isReady;
 }
 
 /**

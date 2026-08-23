@@ -216,6 +216,17 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
       });
     });
 
+    const unsubCancelled = socketService.onChallengeCancelled((data) => {
+      if (data.challengeId === challenge.id) {
+        if (locationSubRef.current) {
+          locationSubRef.current.remove();
+          locationSubRef.current = null;
+        }
+        Alert.alert('Race Cancelled', data.message || 'The challenge leader has cancelled the race.');
+        onClose();
+      }
+    });
+
     return () => {
       isMounted = false;
       unsubscribeMotion();
@@ -226,6 +237,7 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
       unsubLeaderboard();
       unsubFinished();
       unsubCompleted();
+      unsubCancelled();
     };
   }, [visible, countdown, challenge, user, myRank, participants]);
 
@@ -238,6 +250,30 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
     socketService.broadcastStepUpdate(challenge.id, user.id, myStepsRef.current);
   };
 
+  const handleCancelRace = () => {
+    if (!challenge || !user) return;
+    Alert.alert(
+      'Cancel Race',
+      'Are you sure you want to stop and cancel this race for all participants?',
+      [
+        { text: 'Keep Racing', style: 'cancel' },
+        {
+          text: 'Yes, Cancel Race',
+          style: 'destructive',
+          onPress: () => {
+            socketService.cancelChallenge(challenge.id, user.id);
+            if (locationSubRef.current) {
+              locationSubRef.current.remove();
+              locationSubRef.current = null;
+            }
+            onClose();
+          },
+        },
+      ]
+    );
+  };
+
+  const isHost = challenge?.creatorId === user?.id;
   const targetSteps = challenge?.targetSteps || 3000;
   const myProgress = Math.min(100, Math.round((mySteps / targetSteps) * 100));
 
@@ -258,24 +294,36 @@ export const LiveRaceModal: React.FC<LiveRaceModalProps> = ({
           <View style={styles.arenaContainer}>
             {/* Top Bar */}
             <View style={styles.arenaHeader}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.arenaTitle}>{challenge?.title}</Text>
                 <Text style={styles.arenaTarget}>
                   🎯 Target: {targetSteps.toLocaleString()} Steps
                 </Text>
               </View>
 
-              {isFinished ? (
-                <View style={styles.finishedBadge}>
-                  <Crown size={14} color="#D97706" />
-                  <Text style={styles.finishedBadgeText}>Finished #{myRank}!</Text>
-                </View>
-              ) : (
-                <View style={styles.racingBadge}>
-                  <View style={styles.livePulseDot} />
-                  <Text style={styles.racingBadgeText}>GPS & MOTION LIVE</Text>
-                </View>
-              )}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                {isFinished ? (
+                  <View style={styles.finishedBadge}>
+                    <Crown size={14} color="#D97706" />
+                    <Text style={styles.finishedBadgeText}>Finished #{myRank}!</Text>
+                  </View>
+                ) : (
+                  <View style={styles.racingBadge}>
+                    <View style={styles.livePulseDot} />
+                    <Text style={styles.racingBadgeText}>GPS & MOTION LIVE</Text>
+                  </View>
+                )}
+
+                {isHost && (
+                  <TouchableOpacity
+                    style={styles.cancelRaceIconBtn}
+                    onPress={handleCancelRace}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.cancelRaceText}>Cancel</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
 
             {/* My Live Step & GPS HUD Card */}
@@ -525,6 +573,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     color: '#92400E',
+  },
+  cancelRaceIconBtn: {
+    backgroundColor: '#7F1D1D',
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EF4444',
+  },
+  cancelRaceText: {
+    color: '#FCA5A5',
+    fontSize: 11,
+    fontWeight: '800',
   },
   myStepCard: {
     backgroundColor: '#1E293B',

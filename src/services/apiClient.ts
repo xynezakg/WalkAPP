@@ -36,6 +36,7 @@ export const API_BASE_URL = `${SERVER_BASE}/api`;
 export const SOCKET_SERVER_URL = SERVER_BASE;
 
 const AUTH_TOKEN_KEY = '@walkapp_jwt_auth_token_v1';
+const USER_PROFILE_KEY = '@walkapp_user_profile_v1';
 
 export async function getStoredToken(): Promise<string | null> {
   try {
@@ -51,9 +52,25 @@ export async function setStoredToken(token: string): Promise<void> {
 
 export async function clearStoredToken(): Promise<void> {
   await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
+  await AsyncStorage.removeItem(USER_PROFILE_KEY);
 }
 
-// Generic Fetch wrapper with automatic Auth Header
+export async function getStoredUserProfile(): Promise<any | null> {
+  try {
+    const raw = await AsyncStorage.getItem(USER_PROFILE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function setStoredUserProfile(user: any): Promise<void> {
+  try {
+    await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(user));
+  } catch {}
+}
+
+// Generic Fetch wrapper with automatic Auth Header and timeout
 async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = await getStoredToken();
 
@@ -66,18 +83,31 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  // Use AbortController for 15s timeout to allow Render wakeups
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-  const data = await response.json();
+  try {
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
 
-  if (!response.ok) {
-    throw new Error(data.error || 'Network request failed');
+    clearTimeout(timeoutId);
+    const data = await response.json();
+
+    if (!response.ok) {
+      const err: any = new Error(data.error || 'Network request failed');
+      err.status = response.status;
+      throw err;
+    }
+
+    return data as T;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    throw err;
   }
-
-  return data as T;
 }
 
 // Auth API Calls
@@ -129,6 +159,11 @@ export const api = {
     apiRequest<{ message: string; invitedUser: any }>(`/challenges/${challengeId}/invite`, {
       method: 'POST',
       body: JSON.stringify({ targetUsernameOrId }),
+    }),
+
+  cancelChallenge: (challengeId: string) =>
+    apiRequest<{ message: string; challengeId: string }>(`/challenges/${challengeId}/cancel`, {
+      method: 'POST',
     }),
 
   uploadCelebrationPhoto: (challengeId: string, photoBase64: string, caption?: string) =>

@@ -71,4 +71,15 @@ export const socketService = {
     socket.on('challenge_completed', callback);
     return () => socket.off('challenge_completed', callback);
   },
+
+  cancelChallenge: (challengeId: string, userId: string) => {
+    const socket = getSocket();
+    socket.emit('cancel_challenge', { challengeId, userId });
+  },
+
+  onChallengeCancelled: (callback: (data: { challengeId: string; message: string }) => void) => {
+    const socket = getSocket();
+    socket.on('challenge_cancelled', callback);
+    return () => socket.off('challenge_cancelled', callback);
+  },
 };

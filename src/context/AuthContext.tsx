@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { api, getStoredToken, setStoredToken, clearStoredToken } from '../services/apiClient';
+import {
+  api,
+  getStoredToken,
+  setStoredToken,
+  clearStoredToken,
+  getStoredUserProfile,
+  setStoredUserProfile,
+} from '../services/apiClient';
 
 export interface UserAccount {
   id: string;
@@ -33,17 +40,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Restore stored session on boot
   const checkAuth = useCallback(async () => {
     try {
-      const stored = await getStoredToken();
-      if (stored) {
-        setToken(stored);
-        const { user: me } = await api.getMe();
-        setUser(me);
+      const [storedToken, cachedUser] = await Promise.all([
+        getStoredToken(),
+        getStoredUserProfile(),
+      ]);
+
+      if (storedToken) {
+        setToken(storedToken);
+        if (cachedUser) {
+          setUser(cachedUser);
+        }
+
+        // Background refresh from server without blocking UI
+        try {
+          const { user: me } = await api.getMe();
+          setUser(me);
+          await setStoredUserProfile(me);
+        } catch (err: any) {
+          // If server explicitly rejected token (401 / 403), logout. Otherwise keep cached user!
+          if (err.status === 401 || err.status === 403) {
+            await clearStoredToken();
+            setToken(null);
+            setUser(null);
+          } else {
+            console.log('Server waking up / offline, keeping cached profile');
+          }
+        }
       }
     } catch (err) {
       console.log('Session restoration error:', err);
-      await clearStoredToken();
-      setToken(null);
-      setUser(null);
     } finally {
       setIsLoading(false);
     }
@@ -57,7 +82,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const res = await api.login({ identifier, password: pass });
-      await setStoredToken(res.token);
+      await Promise.all([
+        setStoredToken(res.token),
+        setStoredUserProfile(res.user),
+      ]);
       setToken(res.token);
       setUser(res.user);
     } finally {
@@ -69,7 +97,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsLoading(true);
     try {
       const res = await api.register({ username, email, password: pass });
-      await setStoredToken(res.token);
+      await Promise.all([
+        setStoredToken(res.token),
+        setStoredUserProfile(res.user),
+      ]);
       setToken(res.token);
       setUser(res.user);
     } finally {

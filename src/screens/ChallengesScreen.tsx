@@ -154,42 +154,105 @@ export const ChallengesScreen: React.FC<ChallengesScreenProps> = ({ onOpenAdmin 
           </TouchableOpacity>
         </View>
 
-        {/* SECTION 1: MY ACTIVE CHALLENGES */}
+        {/* SECTION 1: MY ACTIVE CHALLENGES & LIVE RACES */}
         {userChallenges.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>My Challenges ({userChallenges.length})</Text>
             <View style={styles.challengeGrid}>
-              {userChallenges.map((ch) => (
-                <TouchableOpacity
-                  key={ch.id}
-                  style={styles.myChallengeCard}
-                  onPress={() => handleOpenLobby(ch.id)}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.cardTop}>
-                    <View style={styles.statusPill}>
-                      <View style={[styles.statusDot, { backgroundColor: ch.status === 'active' ? '#EF4444' : '#10B981' }]} />
-                      <Text style={styles.statusPillText}>
-                        {ch.status === 'active' ? 'RACING NOW' : 'WAITING IN LOBBY'}
-                      </Text>
-                    </View>
-                    <Text style={styles.codeText}>#{ch.inviteCode}</Text>
-                  </View>
+              {userChallenges.map((ch) => {
+                const isActiveRace = ch.status === 'active';
+                const progressPct = Math.min(
+                  100,
+                  Math.round(((ch.userCurrentSteps || 0) / ch.targetSteps) * 100)
+                );
 
-                  <Text style={styles.cardTitle}>{ch.title}</Text>
+                return (
+                  <TouchableOpacity
+                    key={ch.id}
+                    style={[
+                      styles.myChallengeCard,
+                      isActiveRace && styles.activeLiveRaceCard,
+                    ]}
+                    onPress={async () => {
+                      if (isActiveRace) {
+                        try {
+                          const res = await api.getChallengeDetails(ch.id);
+                          setActiveRaceData({ challenge: res.challenge, participants: res.participants });
+                        } catch (_) {
+                          handleOpenLobby(ch.id);
+                        }
+                      } else {
+                        handleOpenLobby(ch.id);
+                      }
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <View style={styles.cardTop}>
+                      <View style={styles.statusPill}>
+                        <View
+                          style={[
+                            styles.statusDot,
+                            { backgroundColor: isActiveRace ? '#EF4444' : '#10B981' },
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.statusPillText,
+                            isActiveRace && { color: '#DC2626' },
+                          ]}
+                        >
+                          {isActiveRace ? '⚡ RACING LIVE IN PROGRESS' : 'WAITING IN LOBBY'}
+                        </Text>
+                      </View>
+                      <Text style={styles.codeText}>#{ch.inviteCode}</Text>
+                    </View>
 
-                  <View style={styles.metaRow}>
-                    <View style={styles.metaBadge}>
-                      <Footprints size={12} color="#0284C7" />
-                      <Text style={styles.metaBadgeText}>{ch.targetSteps.toLocaleString()} Steps</Text>
+                    <Text style={styles.cardTitle}>{ch.title}</Text>
+
+                    {/* Live Progress Bar for Active Races */}
+                    {isActiveRace && (
+                      <View style={styles.activeRaceProgressSection}>
+                        <View style={styles.activeRaceBarBg}>
+                          <View
+                            style={[
+                              styles.activeRaceBarFill,
+                              { width: `${progressPct}%` },
+                            ]}
+                          />
+                        </View>
+                        <View style={styles.activeRaceProgressRow}>
+                          <Text style={styles.activeRaceProgressText}>
+                            Your Steps: {(ch.userCurrentSteps || 0).toLocaleString()} / {ch.targetSteps.toLocaleString()}
+                          </Text>
+                          <Text style={styles.activeRacePercent}>{progressPct}%</Text>
+                        </View>
+                      </View>
+                    )}
+
+                    <View style={styles.metaRow}>
+                      <View style={styles.metaBadge}>
+                        <Footprints size={12} color="#0284C7" />
+                        <Text style={styles.metaBadgeText}>
+                          {ch.targetSteps.toLocaleString()} Steps
+                        </Text>
+                      </View>
+                      <View style={[styles.metaBadge, { backgroundColor: '#FEF3C7' }]}>
+                        <Coins size={12} color="#D97706" />
+                        <Text style={[styles.metaBadgeText, { color: '#92400E' }]}>
+                          🪙 {ch.rewardPoolCoins} Prize
+                        </Text>
+                      </View>
                     </View>
-                    <View style={[styles.metaBadge, { backgroundColor: '#FEF3C7' }]}>
-                      <Coins size={12} color="#D97706" />
-                      <Text style={[styles.metaBadgeText, { color: '#92400E' }]}>🪙 {ch.rewardPoolCoins}</Text>
-                    </View>
-                  </View>
-                </TouchableOpacity>
-              ))}
+
+                    {isActiveRace && (
+                      <View style={styles.resumeRaceBtn}>
+                        <Text style={styles.resumeRaceBtnText}>⚡ Enter / Resume Live Race</Text>
+                        <ArrowRight size={14} color="#FFFFFF" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           </View>
         )}
@@ -566,5 +629,57 @@ const styles = StyleSheet.create({
     color: '#64748B',
     textAlign: 'center',
     marginTop: 4,
+  },
+  activeLiveRaceCard: {
+    borderColor: '#F87171',
+    backgroundColor: '#FFF1F2',
+    borderWidth: 2,
+    shadowColor: '#EF4444',
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+  },
+  activeRaceProgressSection: {
+    marginVertical: 8,
+  },
+  activeRaceBarBg: {
+    height: 8,
+    backgroundColor: '#FEE2E2',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  activeRaceBarFill: {
+    height: '100%',
+    backgroundColor: '#EF4444',
+    borderRadius: 4,
+  },
+  activeRaceProgressRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 4,
+  },
+  activeRaceProgressText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  activeRacePercent: {
+    fontSize: 11,
+    fontWeight: '900',
+    color: '#EF4444',
+  },
+  resumeRaceBtn: {
+    backgroundColor: '#DC2626',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginTop: 10,
+    gap: 6,
+  },
+  resumeRaceBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
   },
 });
